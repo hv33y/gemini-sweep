@@ -6,8 +6,8 @@
 // @author       hv33y (https://github.com/hv33y)
 // @homepageURL  https://github.com/hv33y/gemini-sweep
 // @supportURL   https://github.com/hv33y/gemini-sweep/issues
-// @updateURL    https://raw.githubusercontent.com/hv33y/gemini-sweep/main/gemini-sweep.user.js
-// @downloadURL  https://raw.githubusercontent.com/hv33y/gemini-sweep/main/gemini-sweep.user.js
+// @updateURL    https://raw.githubusercontent.com/hv33y/gemini-sweep/master/gemini-sweep.user.js
+// @downloadURL  https://raw.githubusercontent.com/hv33y/gemini-sweep/master/gemini-sweep.user.js
 // @match        *://gemini.google.com/*
 // @grant        GM_registerMenuCommand
 // @run-at       document-idle
