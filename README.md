@@ -15,7 +15,7 @@ A lightweight, automated cleanup script for Google Gemini that purges unpinned c
    - [Tampermonkey](https://www.tampermonkey.net/)
    - [Violentmonkey](https://violentmonkey.github.io/)
 2. Load the script:
-   - [Direct Install](https://raw.githubusercontent.com/hv33y/gemini-sweep/main/gemini-sweep.user.js)
+   - [Direct Install](https://github.com/hv33y/gemini-sweep/raw/refs/heads/master/gemini-sweep.user.js)
 
 Or create a new script inside your extension dashboard and paste the contents of [`gemini-sweep.user.js`](gemini-sweep.user.js).
 
