@@ -1,9 +1,6 @@
 # Gemini Sweep
 
-A lightweight, automated cleanup script for Google Gemini that purges unpinned conversations in sequence while keeping pinned threads intact.<hr>
-
-<img width="1280" height="640" alt="social-preview" src="https://github.com/user-attachments/assets/05e51779-41ea-4284-8e43-8b7b4b059675" />
-<hr>
+A lightweight, automated cleanup script for Google Gemini that purges unpinned conversations in sequence while keeping pinned threads intact.
 
 ## Features
 
