@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Gemini Sweep - Purge Unpinned Chats
 // @namespace    https://github.com/hv33y
-// @version      2.5.0
-// @description  Automated bulk deletion of unpinned Google Gemini conversations.
+// @version      2.5.1
+// @description  Automated bulk deletion of unpinned Google Gemini conversations with infinite scroll support.
 // @author       hv33y (https://github.com/hv33y)
 // @homepageURL  https://github.com/hv33y/gemini-sweep
 // @supportURL   https://github.com/hv33y/gemini-sweep/issues
@@ -16,12 +16,11 @@
 (function () {
     'use strict';
 
-    console.log('[Gemini Sweep] Initializing...');
+    console.log('[Gemini Sweep] Initializing v2.5.1...');
 
     let isRunning = false;
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    // Double Base64 decoded author credit: "@hv33y"
     const getAuthorTag = () => {
         try {
             return atob(atob('UUdoMk16TjU='));
@@ -105,7 +104,6 @@
 
         container.appendChild(btn);
         targetRoot.appendChild(container);
-        console.log('[Gemini Sweep] Button injected successfully.');
     }
 
     function updateButtonUI(labelText, creditText, bgColor, borderColor) {
@@ -117,6 +115,29 @@
         if (creditSpan) creditSpan.textContent = creditText;
         if (btn && bgColor) btn.style.setProperty('background-color', bgColor, 'important');
         if (btn && borderColor) btn.style.setProperty('border-color', borderColor, 'important');
+    }
+
+    function getChatScrollContainer() {
+        return (
+            document.querySelector('#sidenav-section-content-chats') ||
+            document.querySelector('.chat-history') ||
+            document.querySelector('conversations-list') ||
+            document.querySelector('side-navigation-v2') ||
+            document.querySelector('nav')
+        );
+    }
+
+    async function tryLoadOlderChats() {
+        const container = getChatScrollContainer();
+        if (!container) return false;
+
+        const previousHeight = container.scrollHeight;
+        container.scrollTop = container.scrollHeight;
+
+        // Give the network 1.2s to pull the next cursor chunk
+        await sleep(1200);
+
+        return container.scrollHeight > previousHeight || Boolean(getNextUnpinnedChatRow());
     }
 
     async function toggleSweepProcess() {
@@ -137,63 +158,79 @@
         updateButtonUI('Stop (0)', `by ${author}`, '#202124', '#d93025');
 
         let deletedCount = 0;
+        let scrollAttempts = 0;
 
         try {
             while (isRunning) {
-                updateButtonUI(`Stop (${deletedCount})`, `by ${author}`, '#202124', '#d93025');
+                await closeAnyLingeringDialogs();
 
                 let targetRow = getNextUnpinnedChatRow();
 
+                // If no items visible, scroll down to load older chats
                 if (!targetRow) {
-                    await sleep(1000);
+                    updateButtonUI(`Loading older... (${deletedCount})`, `by ${author}`, '#202124', '#d93025');
+                    const loadedMore = await tryLoadOlderChats();
+
                     targetRow = getNextUnpinnedChatRow();
-                    if (!targetRow) break;
+                    if (!targetRow) {
+                        scrollAttempts++;
+                        if (scrollAttempts >= 3) {
+                            console.log('[Gemini Sweep] All chat history purged.');
+                            break;
+                        }
+                        await sleep(800);
+                        continue;
+                    } else {
+                        scrollAttempts = 0;
+                    }
+                } else {
+                    scrollAttempts = 0;
                 }
 
+                targetRow.scrollIntoView({ block: 'center', behavior: 'instant' });
                 targetRow.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
-                targetRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-                await sleep(350);
+                await sleep(150);
 
-                const menuBtn = findRowMenuButton(targetRow);
+                const menuBtn = getRowMenuButton(targetRow);
                 if (!menuBtn) {
-                    console.warn('[Gemini Sweep] Options menu button not found.');
+                    console.warn('[Gemini Sweep] Could not find 3-dot button in row.');
                     break;
                 }
 
                 menuBtn.click();
-                await sleep(450);
 
-                const deleteOption = getActiveMenuDeleteOption();
+                const deleteOption = await waitForDeleteMenuItem();
                 if (!deleteOption) {
-                    console.warn('[Gemini Sweep] Delete option missing in active menu.');
+                    console.warn('[Gemini Sweep] Delete option missing in dropdown menu.');
                     document.body.click();
-                    await sleep(350);
+                    await sleep(300);
                     break;
                 }
 
                 deleteOption.click();
-                await sleep(500);
 
-                const confirmBtn = getDialogConfirmButton();
-                if (confirmBtn) {
-                    confirmBtn.click();
-                    deletedCount++;
-                    updateButtonUI(`Stop (${deletedCount})`, `by ${author}`, '#202124', '#d93025');
-
-                    await waitForDialogToClose();
-                    await sleep(750);
-                } else {
-                    console.warn('[Gemini Sweep] Confirmation dialog button not found.');
+                const confirmBtn = await waitForActiveConfirmDeleteButton();
+                if (!confirmBtn) {
+                    console.warn('[Gemini Sweep] Delete confirm button not found in dialog.');
                     document.body.click();
-                    await sleep(400);
+                    await sleep(300);
                     break;
                 }
+
+                const targetDialogContainer = confirmBtn.closest('mat-dialog-container') || confirmBtn.closest('.cdk-overlay-pane');
+
+                confirmBtn.click();
+                deletedCount++;
+                updateButtonUI(`Stop (${deletedCount})`, `by ${author}`, '#202124', '#d93025');
+
+                await waitForElementRemoval(targetDialogContainer);
+                await sleep(250);
             }
 
             alert(`Sweep completed. Removed ${deletedCount} unpinned conversation(s).`);
         } catch (err) {
-            console.error('[Gemini Sweep] Execution error:', err);
-            alert('Execution halted due to an unexpected error. Check console output.');
+            console.error('[Gemini Sweep] Execution error details:', err);
+            alert(`Execution stopped: ${err.message || 'Check console output'}`);
         } finally {
             isRunning = false;
             updateButtonUI('Purge Unpinned', author, '#d93025', 'rgba(255, 255, 255, 0.2)');
@@ -201,34 +238,18 @@
     }
 
     function getNextUnpinnedChatRow() {
-        const sideNav = document.querySelector('nav, side-navigation-v2, .side-nav-container') || document.body;
+        const rows = Array.from(document.querySelectorAll('gem-nav-list-item[data-test-id="conversation"]'));
 
-        const allTextElements = Array.from(sideNav.querySelectorAll('*'));
-        const recentHeader = allTextElements.find((el) => {
-            return el.children.length === 0 && el.textContent.trim().toLowerCase() === 'recent';
-        });
+        for (const row of rows) {
+            if (!row.isConnected) continue;
 
-        const conversationRows = Array.from(
-            sideNav.querySelectorAll('a[href^="/app/"], [data-test-id*="conversation"]')
-        );
-
-        for (const item of conversationRows) {
-            const row = item.closest('[role="listitem"], [data-test-id*="conversation"]') || item;
-
-            if (recentHeader) {
-                const position = recentHeader.compareDocumentPosition(row);
-                if (!(position & Node.DOCUMENT_POSITION_FOLLOWING)) {
-                    continue;
-                }
-            }
-
-            const hasPin = row.querySelector(
-                '[data-mat-icon-name="keep"], [data-mat-icon-name="push_pin"], mat-icon[aria-label*="pin" i]'
+            const isPinned = row.querySelector(
+                'gem-icon[fonticonname="push_pin"], mat-icon[data-mat-icon-name="push_pin"], mat-icon[fonticon="push_pin"], .conversation-pin-icon'
             );
-            const ariaLabel = (row.getAttribute('aria-label') || '').toLowerCase();
-            if (hasPin || ariaLabel.includes('pinned')) {
-                continue;
-            }
+            if (isPinned) continue;
+
+            const link = row.querySelector('a[href*="/app/"]');
+            if (!link) continue;
 
             return row;
         }
@@ -236,62 +257,80 @@
         return null;
     }
 
-    function findRowMenuButton(row) {
+    function getRowMenuButton(row) {
         return (
-            row.querySelector('button[aria-label*="options" i]') ||
-            row.querySelector('button[aria-label*="more" i]') ||
-            row.querySelector('button[aria-haspopup="menu"]') ||
-            row.querySelector('button mat-icon[data-mat-icon-name="more_vert"]')?.closest('button') ||
-            row.querySelector('button')
+            row.querySelector('gem-icon-button[data-test-id="actions-menu-button"] button') ||
+            row.querySelector('[data-test-id="actions-menu-button"] button') ||
+            row.querySelector('button[aria-label*="More options" i]') ||
+            row.querySelector('gem-icon-button[data-test-id="actions-menu-button"]')
         );
     }
 
-    function getActiveMenuDeleteOption() {
-        const panels = Array.from(
-            document.querySelectorAll(
-                '.cdk-overlay-pane [role="menu"], [role="menu"], mat-menu-panel, .mat-mdc-menu-panel'
-            )
-        );
+    async function waitForDeleteMenuItem(retries = 20) {
+        for (let i = 0; i < retries; i++) {
+            const menuPanes = Array.from(document.querySelectorAll('.cdk-overlay-pane [role="menuitem"], .cdk-overlay-pane button'));
+            const deleteItem = menuPanes.find((el) => {
+                const text = (el.textContent || '').trim().toLowerCase();
+                const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+                const icon = el.querySelector('[data-mat-icon-name*="delete"], [fonticon*="delete"]');
+                return text.includes('delete') || aria.includes('delete') || Boolean(icon);
+            });
 
-        const openMenu = panels.reverse().find((m) => m.offsetHeight > 0 || m.offsetParent !== null);
-        if (!openMenu) return null;
-
-        const items = Array.from(
-            openMenu.querySelectorAll('[role="menuitem"], button, mat-list-item, .mat-mdc-menu-item')
-        );
-
-        return items.find((el) => {
-            const label = el.textContent.trim().toLowerCase();
-            return label.includes('delete') || label.includes('remove');
-        });
+            if (deleteItem) return deleteItem;
+            await sleep(50);
+        }
+        return null;
     }
 
-    function getDialogConfirmButton() {
-        const dialog = document.querySelector(
-            '[role="dialog"], [role="alertdialog"], mat-dialog-container, .mat-mdc-dialog-container'
-        );
-        if (!dialog) return null;
-
-        const buttons = Array.from(dialog.querySelectorAll('button'));
-        return buttons.find((btn) => {
-            const label = (btn.textContent || btn.getAttribute('aria-label') || '').trim().toLowerCase();
-            return label.includes('delete') || label.includes('confirm');
-        });
-    }
-
-    async function waitForDialogToClose() {
-        let attempts = 0;
-        while (attempts < 25) {
-            const dialog = document.querySelector(
-                '[role="dialog"], [role="alertdialog"], mat-dialog-container, .mat-mdc-dialog-container'
+    async function waitForActiveConfirmDeleteButton(retries = 25) {
+        for (let i = 0; i < retries; i++) {
+            const openDialogs = Array.from(
+                document.querySelectorAll('mat-dialog-container.mdc-dialog--open, .mat-mdc-dialog-container.mdc-dialog--open')
             );
-            if (!dialog) break;
+
+            const activeDialog = openDialogs.at(-1);
+            if (activeDialog) {
+                const buttons = Array.from(activeDialog.querySelectorAll('mat-dialog-actions button, button'));
+                const deleteBtn = buttons.find((b) => {
+                    const text = (b.textContent || '').trim().toLowerCase();
+                    const aria = (b.getAttribute('aria-label') || '').trim().toLowerCase();
+                    return (text.includes('delete') || aria.includes('delete')) && !text.includes('cancel');
+                });
+
+                if (deleteBtn) return deleteBtn;
+            }
+            await sleep(50);
+        }
+        return null;
+    }
+
+    async function waitForElementRemoval(element, maxAttempts = 30) {
+        let attempts = 0;
+        while (attempts < maxAttempts) {
+            if (!element || !element.isConnected) break;
+            const isHidden = window.getComputedStyle(element).display === 'none' || !element.classList.contains('mdc-dialog--open');
+            if (isHidden) break;
             await sleep(100);
             attempts++;
         }
     }
 
-    // Keyboard trigger: Alt + D
+    async function closeAnyLingeringDialogs() {
+        const dialogs = Array.from(
+            document.querySelectorAll('mat-dialog-container.mdc-dialog--open, .mat-mdc-dialog-container.mdc-dialog--open')
+        );
+
+        if (dialogs.length > 0) {
+            for (const dialog of dialogs) {
+                const cancelBtn = Array.from(dialog.querySelectorAll('button')).find((b) =>
+                    (b.textContent || '').trim().toLowerCase().includes('cancel')
+                );
+                if (cancelBtn) cancelBtn.click();
+            }
+            await sleep(200);
+        }
+    }
+
     window.addEventListener('keydown', (e) => {
         if (e.altKey && (e.key === 'd' || e.key === 'D')) {
             e.preventDefault();
